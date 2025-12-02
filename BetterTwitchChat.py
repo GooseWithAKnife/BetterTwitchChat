@@ -76,6 +76,7 @@ class ChatWindow:
         self.connected = False
         self.sock = None
         self.chat_thread = None
+        self.ignored_usernames = set()
         
         self._setup_ui()
         self._setup_event_handlers()
@@ -184,6 +185,14 @@ class ChatWindow:
         spacer = tk.Frame(bottom_frame, bg='#1a1a1a')
         spacer.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+        # Ignore list button
+        self.ignore_button = tk.Button(bottom_frame, text="Ignore List",
+                                       command=self.open_ignore_list_window,
+                                       bg='#007bff', fg='#ffffff',
+                                       font=("Arial", 9, "bold"),
+                                       width=12, relief=tk.FLAT, cursor="hand2")
+        self.ignore_button.pack(side=tk.RIGHT, padx=(0, 10))
+        
         # Status indicator
         self.status_orb = tk.Label(bottom_frame, text="●", fg='#ff4444',
                                   bg='#1a1a1a', font=("Arial", 16, "bold"))
@@ -192,6 +201,74 @@ class ChatWindow:
         self.status_label = tk.Label(bottom_frame, text="Disconnected",
                                     fg='#888888', bg='#1a1a1a', font=("Arial", 9))
         self.status_label.pack(side=tk.RIGHT)
+    
+    def open_ignore_list_window(self):
+        """Open a window to edit ignored usernames (newline-separated)."""
+        win = tk.Toplevel(self.root)
+        win.title("Ignore List")
+        win.configure(bg='#1a1a1a')
+        win.geometry("400x350")
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="Usernames to ignore (no sound):",
+                 fg='#ffffff', bg='#1a1a1a', font=("Arial", 10, "bold")).pack(anchor='w', padx=10, pady=(10, 5))
+
+        hint = tk.Label(win, text="Enter one username per line. '@' optional. Case-insensitive.",
+                        fg='#aaaaaa', bg='#1a1a1a', font=("Arial", 9))
+        hint.pack(anchor='w', padx=10, pady=(0, 8))
+
+        text = scrolledtext.ScrolledText(win, wrap=tk.WORD, width=45, height=12,
+                                         font=("Consolas", 10), bg='#2d2d2d', fg='#ffffff',
+                                         insertbackground='#ffffff', selectbackground='#404040')
+        # Pre-fill with current list
+        try:
+            current = sorted(self.ignored_usernames)
+            text.insert('1.0', "\n".join(current))
+        except Exception:
+            pass
+        text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        button_frame = tk.Frame(win, bg='#1a1a1a')
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        def save_and_close():
+            raw = text.get('1.0', tk.END)
+            names = []
+            for line in raw.splitlines():
+                name = line.strip()
+                if not name:
+                    continue
+                if name.startswith('@'):
+                    name = name[1:]
+                names.append(name.lower())
+            self.ignored_usernames = set(names)
+            self.save_settings()
+            messagebox.showinfo("Ignore List", "Ignore list saved.", parent=win)
+            win.destroy()
+
+        save_btn = tk.Button(button_frame, text="Save", command=save_and_close,
+                             bg='#28a745', fg='#ffffff', font=("Arial", 9, "bold"),
+                             width=10, relief=tk.FLAT, cursor="hand2")
+        save_btn.pack(side=tk.RIGHT, padx=(5, 0))
+
+        cancel_btn = tk.Button(button_frame, text="Cancel", command=win.destroy,
+                               bg='#6c757d', fg='#ffffff', font=("Arial", 9, "bold"),
+                               width=10, relief=tk.FLAT, cursor="hand2")
+        cancel_btn.pack(side=tk.RIGHT)
+
+        # Center the ignore list window on the screen
+        try:
+            win.update_idletasks()
+            screen_width = win.winfo_screenwidth()
+            screen_height = win.winfo_screenheight()
+            window_width = win.winfo_width()
+            window_height = win.winfo_height()
+            x = (screen_width - window_width) // 2
+            y = (screen_height - window_height) // 2
+            win.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        except Exception:
+            pass
     
     def _configure_chat_tags(self):
         """Configure text tags for different message types."""
@@ -281,6 +358,8 @@ class ChatWindow:
                     saved_token = settings['token']
                     if saved_token and saved_token != 'oauth:__CHANGEME__':
                         TOKEN = saved_token
+                if 'ignore_usernames' in settings and isinstance(settings['ignore_usernames'], list):
+                    self.ignored_usernames = set([str(u).lower() for u in settings['ignore_usernames'] if str(u).strip()])
         except Exception as e:
             print(f"Could not load settings: {e}")
     
@@ -300,7 +379,8 @@ class ChatWindow:
             settings.update({
                 'channel': self.channel_var.get(),
                 'auto_connect': self.auto_connect_var.get(),
-                'sound_enabled': self.sound_enabled_var.get()
+                'sound_enabled': self.sound_enabled_var.get(),
+                'ignore_usernames': sorted(list(self.ignored_usernames))
             })
             
             with open(settings_path, 'w') as f:
@@ -396,7 +476,12 @@ class ChatWindow:
                             message = message.rstrip().replace('\uFFFD', '')
                             self.root.after(0, self.add_message, username, message, color)
                             if self.sound_enabled_var.get():
-                                play_sound()
+                                try:
+                                    if username.lower() not in self.ignored_usernames:
+                                        play_sound()
+                                except Exception:
+                                    # Fallback to playing if any unexpected issue occurs
+                                    play_sound()
                         elif 'PRIVMSG' in line:
                             self.root.after(0, self.add_system_message,
                                           f"DEBUG: Could not parse: {line[:50]}...")
